@@ -25,6 +25,8 @@ Standard Flutter project structure with `lib/main.dart` as the primary applicati
 - **Widgets are for UI:** Everything in Flutter's UI is a widget. Compose complex UIs from smaller, reusable widgets.
 - **Navigation:** Use a modern routing package like `go_router`.
 
+---
+
 ## Package Management
 - Use `flutter pub add <package_name>` to add regular dependencies.
 - Use `flutter pub add dev:<package_name>` to add dev dependencies.
@@ -77,16 +79,18 @@ Standard Flutter project structure with `lib/main.dart` as the primary applicati
   ```
   lib/
   ├── main.dart
-  ├── models/          # Data models (json_serializable)
-  ├── viewmodels/      # ChangeNotifier ViewModels (Provider)
-  ├── screens/         # Full-page widgets (one file per screen)
-  ├── widgets/         # Shared reusable widgets
-  └── utils/           # Utility functions, constants, theme
+  ├── common/
+  │   ├── api/         # API 客户端、Dio 实例
+  │   ├── entity/      # 数据实体（@JsonSerializable）
+  │   ├── utils/       # 工具函数、常量、主题
+  │   ├── values/      # 颜色、字符串等资源常量
+  │   └── widgets/     # 跨页面共享的通用 widget
+  └── pages/           # 页面，每个页面一个子文件夹
   ```
 - **Private Widgets:** Use small, private `_Widget` classes instead of private helper methods that return a `Widget` within the same file. If a private widget becomes substantial, promote it to its own public widget file.
 - **Build Methods:** Break down large `build()` methods into smaller, reusable widget classes (in separate files when appropriate).
 - **Design Patterns:** Apply appropriate design patterns throughout the codebase:
-  - **MVVM:** ViewModels (`ChangeNotifier`) + Provider for state management and UI binding.
+  - **Provider + ChangeNotifier:** 状态管理核心模式，`ChangeNotifier` 管理状态，`Provider` 注入和分发。
   - **Repository Pattern:** Abstract data sources behind repository interfaces for testability.
   - **Factory Pattern:** Use factory constructors (especially for `fromJson`) to encapsulate object creation.
   - **Singleton:** Use `Provider`'s single-instance providers for services (e.g., API clients, database helpers).
@@ -97,101 +101,88 @@ Standard Flutter project structure with `lib/main.dart` as the primary applicati
 - **Const Constructors:** Use `const` constructors for widgets and in `build()` methods whenever possible to reduce rebuilds.
 - **Build Method Performance:** Avoid performing expensive operations like network calls or complex computations directly within `build()` methods.
 
+---
+
 ## Application Architecture
-- **Separation of Concerns:** Aim for MVC/MVVM-like separation with defined Model, View, and ViewModel/Controller roles.
+- **Separation of Concerns:** 页面与通用组件分离，业务逻辑与 UI 分离。
 - **Logical Layers:**
-  - **Presentation:** widgets, screens
-  - **Domain:** business logic
-  - **Data:** model classes, API clients
-  - **Core:** shared classes, utilities, extension types
-- **Feature-based Organization:** For larger projects, organize code by feature, where each feature has its own presentation, domain, and data subfolders.
+  - **pages:** 页面级 widget，每个页面对应一个子文件夹
+  - **common/api:** API 客户端、网络请求层
+  - **common/entity:** 数据实体类（`@JsonSerializable`）
+  - **common/utils:** 工具函数、主题、路由配置
+  - **common/values:** 资源常量（颜色、字符串等）
+  - **common/widgets:** 可复用的通用 widget
 
-## State Management
-- **Provider:** Use the `provider` package as the primary state management and dependency injection solution. Add it via `flutter pub add provider`.
+---
 
-### Core Concepts
+## State Management — Provider (必须使用)
 
-- **Creating a new object instance** — always use the default constructor with `create`:
+> 参考文档: [Provider 中文 README](https://github.com/rrousselGit/provider/blob/master/resources/translations/zh-CN/README.md)
 
-  ```dart
-  ChangeNotifierProvider(
-    create: (_) => CounterViewModel(),
-    child: ...,
-  )
-  ```
+- **Provider:** 本项目必须使用 `provider` 作为状态管理和依赖注入方案。添加方式：`flutter pub add provider`。
 
-  **Warning:** Do NOT use `.value` constructor to create new objects — it may cause unexpected side effects. The `.value` constructor should only be used to reuse an existing object instance.
+### 核心原则
 
-- **Reusing an existing object** — use the `.value` constructor:
-  ```dart
-  ChangeNotifierProvider.value(
-    value: existingViewModel,
-    child: ...,
-  )
-  ```
+#### 创建新对象实例 — 始终使用默认构造函数 + `create`
+```dart
+ChangeNotifierProvider(
+  create: (_) => CounterNotifier(),
+  child: ...,
+)
+```
+**警告：不要** 使用 `.value` 构造函数创建新对象——可能导致非预期的副作用。`.value` 构造函数**只能用于**复用已存在的对象实例。
 
-### Reading Values
+#### 复用已有对象 — 使用 `.value` 构造函数
+```dart
+ChangeNotifierProvider.value(
+  value: existingNotifier,
+  child: ...,
+)
+```
 
-- **`context.watch<T>()`** — rebuilds the widget when `T` changes. Use inside `build()` methods.
-- **`context.read<T>()`** — returns `T` without listening for changes. Use in event handlers (callbacks like `onPressed`). **Cannot be called inside `StatelessWidget.build` or `State.build`.**
-- **`context.select<T, R>(R cb(T value))`** — listens to only a portion of the state, preventing unnecessary rebuilds when other properties change:
-  ```dart
-  // Only rebuilds when name changes, ignores other Person fields
-  final name = context.select((Person p) => p.name);
-  ```
+#### 延迟创建（Lazy）
+`create` 和 `update` 回调默认是**延迟调用**的，只有首次读取时才会执行。如需预热计算，设置 `lazy: false`。
 
-- **Nullable Providers:** If a provider may not exist, declare the type as nullable to return `null` instead of throwing an exception:
-  ```dart
-  context.watch<MyViewModel?>()  // Returns null if not found
-  ```
+### 读取值
 
-### MVVM with Provider
-
-ViewModels extend `ChangeNotifier`, are provided via `ChangeNotifierProvider`, and are consumed via `context.watch<T>()` / `context.read<T>()`:
+| 方法 | 行为 | 使用场景 |
+|------|------|---------|
+| `context.watch<T>()` | 监听 `T` 的变化，变化时重建 widget | `build()` 方法内 |
+| `context.read<T>()` | 直接返回 `T`，不监听变化 | 事件处理回调（`onPressed` 等），**不可在 `StatelessWidget.build` 或 `State.build` 中使用** |
+| `context.select<T, R>(R cb(T))` | 只监听 `T` 的一部分内容，只有该部分变化时才重建 | 避免不必要的重建，性能优化首选 |
 
 ```dart
-class CounterViewModel extends ChangeNotifier {
-  int _count = 0;
-  int get count => _count;
+// ❌ 错误 — person 的任何字段变化都会触发重建
+final name = context.watch<Person>().name;
 
-  void increment() {
-    _count++;
-    notifyListeners();
-  }
-}
+// ✅ 正确 — 只有 name 变化时才触发重建
+final name = context.select((Person p) => p.name);
+```
 
-// Provide it at the top of the widget tree
-ChangeNotifierProvider(
-  create: (_) => CounterViewModel(),
-  child: const MyApp(),
-);
-
-// Consume in widgets
-final viewModel = context.watch<CounterViewModel>();
-Text('Count: ${viewModel.count}');
+#### 可空 Provider
+当某个 provider 可能不存在时，声明类型为可空来获取 `null` 而不是抛出异常：
+```dart
+context.watch<MyNotifier?>()  // 未找到时返回 null
 ```
 
 ### MultiProvider
-
-For multiple ViewModels, use `MultiProvider` at the app root to avoid deeply nested providers:
-
+消除深层嵌套，行为等同于逐层嵌套：
 ```dart
 MultiProvider(
   providers: [
-    ChangeNotifierProvider(create: (_) => UserViewModel()),
-    ChangeNotifierProvider(create: (_) => SettingsViewModel()),
-    ChangeNotifierProvider(create: (_) => ApiService()),
+    ChangeNotifierProvider(create: (_) => UserNotifier()),
+    ChangeNotifierProvider(create: (_) => SettingsNotifier()),
+    Provider<ApiService>(create: (_) => ApiService()),
   ],
   child: const MyApp(),
 );
 ```
+**注意：`providers` 数组不能为空。**
 
-### Consumer and Selector
-
-Use `Consumer` or `Selector` widgets to scope rebuilds to a specific subtree when `BuildContext` access is inconvenient:
-
+### Consumer 和 Selector
+当 `BuildContext` 不方便直接访问时（例如需要限制重建范围），使用 `Consumer` 或 `Selector` 将重建限定到特定子树：
 ```dart
-// Only Bar rebuilds when A changes; Foo and Baz are not rebuilt
+// 只有 Bar 在 A 变化时重建；Foo 和 Baz 不重建
 Foo(
   child: Consumer<A>(
     builder: (_, a, child) {
@@ -201,11 +192,10 @@ Foo(
   ),
 )
 ```
+`child` 参数在重建时被保留，**避免不必要的重建**——这是 Provider 的核心性能优化手段。
 
 ### ProxyProvider
-
-Use `ProxyProvider` (and variants `ProxyProvider2`, `ProxyProvider3`) to derive values from multiple providers, updating automatically when any dependency changes:
-
+使用 `ProxyProvider`（及变体 `ProxyProvider2`、`ProxyProvider3`）从多个 provider 聚合/派生值，任一依赖更新时自动更新：
 ```dart
 MultiProvider(
   providers: [
@@ -217,12 +207,10 @@ MultiProvider(
   child: Foo(),
 );
 ```
+当派生值本身是 `ChangeNotifier` 时，使用 `ChangeNotifierProxyProvider`。
 
-Use `ChangeNotifierProxyProvider` when the derived value is itself a `ChangeNotifier`.
-
-### FutureProvider and StreamProvider
-
-- **FutureProvider:** Exposes a `Future` result to the widget tree. Requires `initialData`:
+### FutureProvider 和 StreamProvider
+- **FutureProvider:** 将 `Future` 结果暴露给 widget 树。**必须**提供 `initialData`：
   ```dart
   FutureProvider<User>(
     create: (_) => apiService.fetchUser(),
@@ -230,8 +218,7 @@ Use `ChangeNotifierProxyProvider` when the derived value is itself a `ChangeNoti
     child: ...,
   );
   ```
-
-- **StreamProvider:** Listens to a `Stream` and exposes the latest value. Requires `initialData`:
+- **StreamProvider:** 监听 `Stream` 并暴露最新值。**必须**提供 `initialData`：
   ```dart
   StreamProvider<int>(
     create: (_) => counterStream,
@@ -240,75 +227,79 @@ Use `ChangeNotifierProxyProvider` when the derived value is itself a `ChangeNoti
   );
   ```
 
-### Triggering Side Effects (API calls in ViewModel)
-
-Mutating state during `build()` is forbidden. Instead, trigger side effects in `initState` with `Future.microtask`:
-
+### 在状态类中触发副作用（API 调用）
+在 `build()` 期间修改状态是被禁止的。应在 `initState` 中使用 `Future.microtask` 延迟执行：
 ```dart
 @override
 void initState() {
   super.initState();
   Future.microtask(() =>
-    context.read<UserViewModel>().fetchUserData(someValue);
+    context.read<UserNotifier>().fetchUserData(someValue);
   );
 }
 ```
 
-### Type Uniqueness
-
-**Cannot have two providers of the same type** — a widget gets only the nearest one. Wrap values in distinct types:
-
+### 类型唯一性
+**不能有两个同类型的 provider** —— widget 只会获取最近的。用不同的类型包装：
 ```dart
-// ❌ Wrong — same type
+// ❌ 错误 — 相同类型，London 会覆盖 England
 Provider<String>(create: (_) => 'England')
 Provider<String>(create: (_) => 'London')
 
-// ✅ Correct — distinct types
+// ✅ 正确 — 不同类型
 Provider<Country>(create: (_) => Country('England'))
 Provider<City>(create: (_) => City('London'))
 ```
 
-### Hot Reload Support
-
-Implement `ReassembleHandler` on ViewModels for hot-reload compatibility:
-
+### 接口/实现分离
+通过泛型类型提示消费接口、提供具体实现：
 ```dart
-class MyViewModel extends ChangeNotifier implements ReassembleHandler {
+ChangeNotifierProvider<RepositoryInterface>(
+  create: (_) => RepositoryImplementation(),
+  child: Foo(),
+)
+```
+
+### 热重载支持
+在 `ChangeNotifier` 上实现 `ReassembleHandler` 以兼容热重载：
+```dart
+class MyNotifier extends ChangeNotifier implements ReassembleHandler {
   @override
-  void reassemble() {
-    // Handle hot-reload state reset
-  }
+  void reassemble() {}
 }
 ```
 
-### Provider Type Summary
+### Provider 类型速查
 
-| Provider | When to Use |
+| Provider | 用途 |
 |---|---|
-| `Provider` | Expose any immutable value or service |
-| `ChangeNotifierProvider` | Expose a `ChangeNotifier` ViewModel (auto-calls `dispose`) |
-| `FutureProvider` | Expose a `Future` result |
-| `StreamProvider` | Expose a `Stream`'s latest value |
-| `ProxyProvider` | Derive a value from other providers |
-| `ChangeNotifierProxyProvider` | Derive a `ChangeNotifier` from other providers |
-| `ListenableProvider` | Expose any `Listenable` object |
+| `Provider` | 暴露任意不可变值或服务 |
+| `ChangeNotifierProvider` | 暴露 `ChangeNotifier`（自动调用 `dispose`） |
+| `FutureProvider` | 暴露 `Future` 结果（需要 `initialData`） |
+| `StreamProvider` | 暴露 `Stream` 的最新值（需要 `initialData`） |
+| `ProxyProvider` | 从其他 provider 派生值 |
+| `ChangeNotifierProxyProvider` | 从其他 provider 派生 `ChangeNotifier` |
+| `ListenableProvider` | 暴露任意 `Listenable` 对象 |
 
-### Ephemeral vs App State
+### 临时状态 vs 应用状态
+- **临时状态（Ephemeral state）：** 局部 UI 状态 → 使用 `StatefulWidget` 的 `setState`。
+- **应用状态（App state）：** 跨组件共享的状态 → 使用 Provider + `ChangeNotifier`。
 
-- **Ephemeral state:** Local UI state → use `StatefulWidget`'s `setState`.
-- **App state:** Shared across the app → use Provider ViewModels (`ChangeNotifier`).
+---
 
-## Data Flow
-- Define data structures (classes) to represent application data.
-- Abstract data sources (API calls, database operations) using Repositories/Services to promote testability.
+## 网络请求 — Dio（必须使用）
 
-## Networking (Dio)
+> 参考文档: [Dio 中文 README](https://github.com/cfug/dio/blob/main/dio/README-ZH.md)
 
-- **Dio:** Use the `dio` package as the primary HTTP client for all network requests. Add it via `flutter pub add dio`.
+- **Dio:** 本项目必须使用 `dio` 作为 HTTP 客户端。添加方式：`flutter pub add dio`。
 
-### Setup & Configuration
+### 核心概念
 
-Create a singleton `Dio` instance with shared configuration (base URL, timeouts, common headers):
+Dio 实例支持统一配置（`BaseOptions`），可同时发起多个请求，每个请求可独立配置（`Options`）。所有请求都通过 `Future<Response<T>> request<T>(...)` 流转，便捷方法（`get`、`post` 等）是其封装。
+
+### 实例创建与配置
+
+创建**单例** `Dio` 实例，集中配置 baseUrl、超时、公共 headers：
 
 ```dart
 import 'package:dio/dio.dart';
@@ -334,10 +325,9 @@ class ApiClient {
   }
 
   void _setupInterceptors() {
-    // Auth token interceptor (use QueuedInterceptor for token refresh)
+    // Auth token 注入（QueuedInterceptor 确保并发请求串行刷新 token）
     dio.interceptors.add(QueuedInterceptorsWrapper(
       onRequest: (options, handler) {
-        // Add auth token
         final token = AuthStorage.getToken();
         if (token != null) {
           options.headers['Authorization'] = 'Bearer $token';
@@ -345,7 +335,7 @@ class ApiClient {
         return handler.next(options);
       },
       onError: (error, handler) async {
-        // Handle 401: refresh token and retry
+        // 401 时自动刷新 token 并重试
         if (error.response?.statusCode == 401) {
           final newToken = await refreshToken();
           if (newToken != null) {
@@ -357,7 +347,7 @@ class ApiClient {
       },
     ));
 
-    // Log interceptor — always add LAST in the chain
+    // Log 拦截器 — 必须放在最后，否则后续拦截器的修改不会出现在日志中
     dio.interceptors.add(LogInterceptor(
       requestBody: true,
       responseBody: true,
@@ -367,20 +357,32 @@ class ApiClient {
 }
 ```
 
-- **Clone with variations:** Use `dio.clone()` instead of creating new instances when you need slight configuration differences.
+- **克隆变体：** 需要少量配置差异时，使用 `dio.clone()` 而不是新建实例。
 
-### Request Methods
+### 拦截器（Interceptor）
 
-- **GET:**
+拦截器以 FIFO 顺序执行。每个拦截器可以通过 `handler` 控制流转：
+- `handler.next(data)` — 传给下一个拦截器
+- `handler.resolve(response)` — 短路返回自定义数据（触发 `.then`）
+- `handler.reject(error)` — 中断请求并抛出错误（触发 `.catchError`）
+
+**并行 vs 串行：**
+- 标准 `Interceptor`：允许并发进入，适合日志、header 注入
+- `QueuedInterceptor`：串行化进入，**当多个并发请求同时进入拦截器且需要共享状态时使用**（如 token 刷新——确保只发起一次刷新请求）
+
+**关键规则：`LogInterceptor` 必须作为最后一个拦截器添加。**
+
+### 请求方法
+
+- **GET（带查询参数）：**
   ```dart
-  // With query parameters
   final response = await dio.get(
     '/users',
     queryParameters: {'page': 1, 'limit': 20},
   );
   ```
 
-- **POST:**
+- **POST：**
   ```dart
   final response = await dio.post(
     '/users',
@@ -388,7 +390,7 @@ class ApiClient {
   );
   ```
 
-- **PUT / PATCH / DELETE:** Use the generic `request()` method:
+- **PUT / PATCH / DELETE：** 使用通用 `request()` 方法：
   ```dart
   await dio.request(
     '/users/1',
@@ -397,9 +399,14 @@ class ApiClient {
   );
   ```
 
-### Error Handling
+### 错误处理
 
-Always catch `DioException` and handle errors properly:
+所有错误统一包装为 `DioException`，关键字段：
+- `type` — `DioExceptionType` 枚举（connectionTimeout、sendTimeout、receiveTimeout、connectionError、badResponse、cancel 等）
+- `response` — 服务器返回了非 2xx/304 响应时非空
+- `requestOptions` — 始终可用，用于诊断
+- `error` — 底层原始错误对象
+- `stackTrace` — 保留的错误堆栈
 
 ```dart
 try {
@@ -407,7 +414,7 @@ try {
   return UserList.fromJson(response.data);
 } on DioException catch (e) {
   if (e.response != null) {
-    // Server returned an error response
+    // 服务器返回了错误响应
     final statusCode = e.response?.statusCode;
     final errorData = e.response?.data;
     throw ServerException(
@@ -415,7 +422,7 @@ try {
       statusCode: statusCode,
     );
   } else {
-    // Network error (timeout, no internet, etc.)
+    // 网络错误（超时、无网络等）
     switch (e.type) {
       case DioExceptionType.connectionTimeout:
       case DioExceptionType.sendTimeout:
@@ -430,7 +437,7 @@ try {
 }
 ```
 
-### Form Data & File Upload
+### FormData 与文件上传
 
 ```dart
 // multipart/form-data
@@ -445,9 +452,9 @@ final formData = FormData.fromMap({
 await dio.post('/upload', data: formData);
 ```
 
-**Important:** Never reuse `FormData` or `MultipartFile` instances across requests — create fresh instances each time.
+**重要：切勿在请求之间复用 `FormData` 或 `MultipartFile` 实例——必须每次创建新实例。**
 
-### File Download
+### 文件下载
 
 ```dart
 final dir = await getTemporaryDirectory();
@@ -462,71 +469,56 @@ await dio.download(
 );
 ```
 
-### Request Cancellation
+### 请求取消
 
-Use `CancelToken` to cancel in-flight requests and prevent memory leaks:
-
+使用 `CancelToken` 取消进行中的请求，防止内存泄漏：
 ```dart
 final cancelToken = CancelToken();
 dio.get('/users', cancelToken: cancelToken).catchError((error) {
   if (CancelToken.isCancel(error)) {
     print('Request canceled: ${error.message}');
   }
-  // Handle other errors
 });
 
-// Cancel when widget is disposed
 @override
 void dispose() {
   cancelToken.cancel('Widget disposed');
   super.dispose();
 }
 ```
+一个 `CancelToken` 可以跨多个请求共享，一次性取消所有关联请求。
 
-### Interceptors Best Practices
+### 架构集成
 
-1. **Auth token injection:** Use `QueuedInterceptorsWrapper` for serialized token refresh logic — ensures only the first concurrent request fetches a new token while others wait.
-2. **Logging:** Always add `LogInterceptor` **last** in the interceptor chain so modifications from earlier interceptors are visible:
-   ```dart
-   dio.interceptors.add(LogInterceptor(
-     logPrint: (o) => debugPrint(o.toString()),  // Use debugPrint in Flutter
-   ));
-   ```
-3. **Response transformation:** Use interceptors to handle common response wrapping/unwrapping (e.g., extracting `data` from `{"code": 200, "data": ...}`).
-4. **Short-circuit:** Interceptors can resolve or reject early to skip the actual network call (useful for caching).
-
-### Architecture Integration
-
-- **Repository Pattern:** Encapsulate Dio calls inside repository classes. ViewModels call repositories, never Dio directly.
-- **Provider Integration:** Expose repositories via `Provider` as singleton services:
-
-```dart
-MultiProvider(
-  providers: [
-    Provider<ApiClient>(create: (_) => ApiClient()),
-    Provider<UserRepository>(create: (_) => UserRepository(_.read<ApiClient>())),
-  ],
-  child: const MyApp(),
-);
-```
-
-- **ViewModel usage:**
+- **Repository 模式：** 将 Dio 调用封装在 Repository 类中。状态管理类调用 Repository，**绝不直接调用 Dio**。
+- **Provider 集成：** 通过 `Provider` 将服务作为单例暴露：
   ```dart
-  class UserViewModel extends ChangeNotifier {
+  MultiProvider(
+    providers: [
+      Provider<ApiClient>(create: (_) => ApiClient()),
+      Provider<UserRepository>(create: (_) => UserRepository(_.read<ApiClient>())),
+    ],
+    child: const MyApp(),
+  );
+  ```
+- **状态管理类使用：**
+  ```dart
+  class UserNotifier extends ChangeNotifier {
     final UserRepository _repository;
-    UserViewModel(this._repository);
+    UserNotifier(this._repository);
 
     Future<void> loadUsers() async {
       try {
         final users = await _repository.getUsers();
-        // Update state...
         notifyListeners();
       } on ServerException catch (e) {
-        // Handle specific errors
+        // 处理特定错误
       }
     }
   }
   ```
+
+---
 
 ## Routing
 - **GoRouter:** Use the `go_router` package for declarative navigation, deep linking, and web support:
@@ -618,6 +610,74 @@ try {
     stackTrace: s,
   );
 }
+```
+
+---
+
+## Design Patterns（设计模式 — 必须遵循）
+
+本项目遵循以下设计模式，按现有目录结构组织：
+
+### Provider + ChangeNotifier（状态管理核心）
+
+```
+Page Widget → ChangeNotifier (状态) → Repository → ApiClient (Dio)
+      ↑ context.watch / context.read
+```
+
+- **Entity**（`common/entity/`）：数据实体，`@JsonSerializable` 注解，纯数据结构。
+- **ChangeNotifier**（`common/utils/` 或页面文件夹内）：管理业务状态，通过 Provider 暴露。
+- **Page Widget**（`pages/`）：消费状态、渲染 UI，不直接访问 API 或数据库。
+- **API Client**（`common/api/`）：Dio 实例 + 拦截器配置。
+
+### Repository 模式
+```
+ChangeNotifier → Repository → DataSource (API / DB)
+```
+- Repository 是数据源的抽象层，让状态管理类不需要知道数据从哪里来。
+- Repository 放在 `common/api/` 或页面文件夹内。
+- 便于单元测试时注入 fake/stub 替代真实数据源。
+
+### 其他必备模式
+
+| 模式 | 应用场景 |
+|------|---------|
+| **Singleton** | `ApiClient`（Dio 实例）— 通过 Provider 单例暴露 |
+| **Factory** | 数据实体的 `factory X.fromJson(...)` 构造函数 |
+| **Observer** | `ChangeNotifier` + `notifyListeners()` — Provider 内置的观察者模式 |
+| **Strategy** | 可互换的算法（验证策略、排序策略）— 定义接口，注入不同实现 |
+
+---
+
+## Widget 封装规则（必须遵循）
+
+### 必须封装为独立 Widget 的场景
+
+以下任一条件满足，该 widget **必须**封装为独立类（文件）：
+1. **跨页面复用：** 同一个 widget 在 ≥2 个地方使用
+2. **自包含状态：** widget 拥有自己独立的状态管理逻辑
+3. **单一职责：** widget 有明确定义的单一功能（如头像卡片、评分组件）
+4. **语义独立：** widget 对应一个明确的概念/实体（如 `UserCard`、`CommentBubble`）
+5. **父文件过长：** 父文件因 widget 内联导致超过 200 行
+
+### 封装方式
+
+- **优先 `StatelessWidget`：** 无内部状态时使用
+- **有内部状态时：** 使用 `StatefulWidget` 或 Provider 消费 `ChangeNotifier`
+- **小粒度私有 widget：** 创建 `_PrivateWidget` 类而不是 `Widget _buildXxx()` 私有方法
+- **文件命名：** `snake_case`，与类名一致（`UserCard` → `user_card.dart`）
+
+### 目录策略
+
+```
+lib/
+├── common/widgets/    # 跨页面共享的通用 widget
+│   ├── buttons/
+│   ├── cards/
+│   └── dialogs/
+└── pages/             # 页面，每个页面对应一个子文件夹
+    └── home/
+        └── widgets/   # 仅该页面使用的私有 widget
 ```
 
 ---
